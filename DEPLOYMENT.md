@@ -54,8 +54,12 @@ agent-3 handled=2
 
 ## Bằng Chứng
 
-- `screenshots/dashboard.png`: trạng thái Docker Compose với Redis, ba agent và Nginx.
-- `screenshots/health.png`: phản hồi `/health` và các endpoint local.
+- `screenshots/dashboard.png`: Docker Compose Local Fallback với Redis, ba agent replica và Nginx đều hoạt động.
+- `screenshots/health.png`: `GET /health` trả HTTP 200 (liveness).
+- `screenshots/ready.png`: `GET /ready` trả HTTP 200 và xác nhận Redis sẵn sàng.
+- `screenshots/ask-unauthorized.png`: `POST /ask` không có `X-API-Key` trả HTTP 401.
+- `screenshots/ask-authorized.png`: `POST /ask` có API key hợp lệ trả HTTP 200; khóa thật đã được che.
+- `screenshots/stateless.png`: năm request được xử lý qua ba replica với lịch sử dùng chung trong Redis.
 
 ## Lý Do Dùng Local Fallback
 
