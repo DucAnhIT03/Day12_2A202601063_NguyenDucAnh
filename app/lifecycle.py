@@ -12,6 +12,11 @@ balancer ngừng đẩy traffic mới vào → xử lý nốt request đang ch�
 from __future__ import annotations
 
 import signal
+import threading
+from contextlib import contextmanager
+
+
+DRAIN_TIMEOUT_SECONDS = 30.0
 
 
 class Lifecycle:
@@ -21,6 +26,41 @@ class Lifecycle:
         self.shutting_down = False
         # Handler đã được đăng ký trước ta (của uvicorn) — xem install()
         self._previous: dict = {}
+        self._installed = False
+        self._active_requests = 0
+        self._requests_finished = threading.Condition()
+
+    @property
+    def active_requests(self) -> int:
+        """Số request đã nhận và chưa xử lý xong."""
+        with self._requests_finished:
+            return self._active_requests
+
+    @contextmanager
+    def track_request(self):
+        """Theo dõi một request để shutdown có thể đợi nó hoàn thành."""
+        with self._requests_finished:
+            self._active_requests += 1
+        try:
+            yield
+        finally:
+            with self._requests_finished:
+                self._active_requests -= 1
+                if self._active_requests == 0:
+                    self._requests_finished.notify_all()
+
+    def wait_for_requests(self, timeout: float = DRAIN_TIMEOUT_SECONDS) -> bool:
+        """Đợi request đang chạy, nhưng không quá ``timeout`` giây.
+
+        Trả ``True`` nếu đã drain hết, ``False`` nếu chạm giới hạn thời gian.
+        Việc đợi diễn ra trong lifespan shutdown, không nằm trong signal
+        handler, để event loop vẫn có thể hoàn thành các request đang chạy.
+        """
+        with self._requests_finished:
+            return self._requests_finished.wait_for(
+                lambda: self._active_requests == 0,
+                timeout=max(0.0, timeout),
+            )
 
     def request_shutdown(self, signum=None, frame=None) -> None:
         """Signal handler: đánh dấu process đang tắt dần.
@@ -44,7 +84,10 @@ class Lifecycle:
         tham số này. Không làm gì nặng ở đây (không gọi mạng, không ghi file)
         — handler chạy xen giữa bytecode.
         """
-        raise NotImplementedError("TODO (CP4): cài đặt request_shutdown")
+        self.shutting_down = True
+        previous = self._previous.get(signum)
+        if callable(previous):
+            previous(signum, frame)
 
     def install(self) -> None:
         """Đăng ký handler cho SIGTERM và SIGINT, nhớ lại handler cũ.
@@ -56,7 +99,13 @@ class Lifecycle:
 
         SIGTERM: orchestrator yêu cầu tắt. SIGINT: bạn bấm Ctrl+C.
         """
-        raise NotImplementedError("TODO (CP4): cài đặt install")
+        if self._installed:
+            return
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self._previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, self.request_shutdown)
+        self._installed = True
 
 
 # Một instance dùng chung cho cả app
